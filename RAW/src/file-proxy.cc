@@ -33,6 +33,7 @@ class FileProxyTask : public Task
 
   bool mStatus = false;
   bool mCONET = false;
+  bool mDumpData = false;
   std::ifstream mFile;
   char mBuffer[1048576];
 };
@@ -42,6 +43,7 @@ FileProxyTask::init(InitContext& ic)
 {
   auto infilename = ic.options().get<std::string>("infilename");
   mCONET = ic.options().get<bool>("CONET");
+  mDumpData = ic.options().get<bool>("dump-data");
 
   /** open input file **/
   std::cout << " --- Opening input file: " << infilename << std::endl;
@@ -140,7 +142,17 @@ FileProxyTask::run(ProcessingContext& pc)
   if (mCONET) payload = readCONET();
   else payload = readFLP();
   if (payload == 0) return;
-  
+
+  if (mDumpData) {
+    std::cout << " --- dump data: " << payload << " bytes" << std::endl;
+    uint32_t *word = reinterpret_cast<uint32_t *>(mBuffer);
+    for (int i = 0; i < payload / 4; ++i) {
+      printf(" 0x%08x \n", *word);
+      word++;
+    }
+    std::cout << " --- end of dump data " << std::endl;
+  }
+
   /** output **/
   auto device = pc.services().get<o2::framework::RawDeviceService>().device();
   auto outputRoutes = pc.services().get<o2::framework::RawDeviceService>().spec().outputs;
@@ -186,6 +198,7 @@ WorkflowSpec defineDataProcessing(ConfigContext const& cfgc)
 	AlgorithmSpec(adaptFromTask<FileProxyTask>()),
 	Options{
 	  {"infilename", VariantType::String, "", {"Input file name"}},
+	  {"dump-data", VariantType::Bool, false, {"Dump data"}},
 	  {"CONET", VariantType::Bool, false, {"CONET mode"}}}
     }
   };

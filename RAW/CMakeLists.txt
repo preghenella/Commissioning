@@ -11,3 +11,21 @@ target_link_libraries(atc-file-proxy
   )
 install(TARGETS atc-file-proxy RUNTIME DESTINATION bin)
 
+if(TOFBUF_FOUND)
+
+set(CMAKE_VERBOSE_MAKEFILE ON)
+
+add_executable(atc-scl-proxy src/scl-proxy.cc ${TOFBUF_SOURCES})
+target_include_directories(atc-scl-proxy PRIVATE ${TOFBUF_INCLUDE_DIRS})
+target_link_libraries(atc-scl-proxy
+  PUBLIC
+  PRIVATE
+  FairMQ::FairMQ
+  AliceO2::Framework
+  ROOT::Core
+  ms_gsl::ms_gsl
+  arrow::arrow_shared
+  arrow::gandiva_shared
+  )
+install(TARGETS atc-scl-proxy RUNTIME DESTINATION bin)
+endif()
