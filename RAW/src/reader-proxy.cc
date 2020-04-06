@@ -1,27 +1,16 @@
 /// @author Roberto Preghenella
 /// @since  2020-03-08
 
-#include "Framework/Task.h"
-#include "Framework/WorkflowSpec.h"
-#include "Framework/ConfigParamSpec.h"
-#include "Framework/ConfigParamRegistry.h"
-#include "Framework/ControlService.h"
-#include "Framework/CallbackService.h"
-#include "Framework/ConcreteDataMatcher.h"
-#include "Framework/RawDeviceService.h"
-#include "Framework/DeviceSpec.h"
-#include <fairmq/FairMQDevice.h>
+#include "input-proxy.hh"
 
 #include "Headers/RAWDataHeader.h"
 #include "DataFormatsTOF/RawDataFormat.h"
 
-using namespace o2::framework;
-
-class FileProxyTask : public Task
+class ReaderProxyTask : public InputProxyTask
 {
  public:
-  FileProxyTask() = default;
-  ~FileProxyTask() override = default;
+  ReaderProxyTask() = default;
+  ~ReaderProxyTask() override = default;
 
   void init(InitContext& ic) final;
   void run(ProcessingContext& pc) final;
@@ -33,23 +22,23 @@ class FileProxyTask : public Task
 
   bool mStatus = false;
   bool mCONET = false;
-  bool mDumpData = false;
+  bool mDumpPayload = false;
   std::ifstream mFile;
   char mBuffer[1048576];
 };
 
 void
-FileProxyTask::init(InitContext& ic)
+ReaderProxyTask::init(InitContext& ic)
 {
-  auto infilename = ic.options().get<std::string>("infilename");
+  auto filename = ic.options().get<std::string>("filename");
   mCONET = ic.options().get<bool>("CONET");
-  mDumpData = ic.options().get<bool>("dump-data");
+  mDumpPayload = ic.options().get<bool>("dump-payload");
 
   /** open input file **/
-  std::cout << " --- Opening input file: " << infilename << std::endl;
-  mFile.open(infilename, std::fstream::in | std::fstream::binary);
+  std::cout << " --- Opening input file: " << filename << std::endl;
+  mFile.open(filename, std::fstream::in | std::fstream::binary);
   if (!mFile.is_open()) {
-    std::cout << " --- File is not open " << std::endl;
+    std::cout << " --- Cannot open input file: " << strerror(errno) << std::endl;
     mStatus = true;
   }
 
@@ -60,10 +49,11 @@ FileProxyTask::init(InitContext& ic)
 };
 
 long
-FileProxyTask::readFLP()
+ReaderProxyTask::readFLP()
 {
   /** read input file **/
   char *pointer = mBuffer;
+  std::cout << " --- trying to read 64 bytes " << std::endl;
   if (!mFile.read(pointer, 64)) {
     std::cout << " --- Cannot read input file: " << strerror(errno) << std::endl;
     mStatus = true;
@@ -72,6 +62,7 @@ FileProxyTask::readFLP()
   long payload = 64;
   auto rdh = reinterpret_cast<o2::header::RAWDataHeader*>(pointer);
   while (!rdh->stop) {
+    std::cout << " --- trying to read " << rdh->offsetToNext - rdh->headerSize << " bytes " << std::endl;
     if (!mFile.read(pointer + rdh->headerSize, rdh->offsetToNext - rdh->headerSize)) {
       std::cout << " --- Cannot read input file: " << strerror(errno) << std::endl;
       mStatus = true;
@@ -79,6 +70,7 @@ FileProxyTask::readFLP()
     }
     payload += (rdh->offsetToNext - rdh->headerSize);
     pointer += rdh->offsetToNext;
+    std::cout << " --- trying to read 64 bytes " << std::endl;
     if (!mFile.read(pointer, 64)) {
       std::cout << " --- Cannot read input file: " << strerror(errno) << std::endl;
       mStatus = true;
@@ -92,7 +84,7 @@ FileProxyTask::readFLP()
 }
 
 long
-FileProxyTask::readCONET()
+ReaderProxyTask::readCONET()
 {
 
   char *pointer = mBuffer;
@@ -126,7 +118,7 @@ FileProxyTask::readCONET()
 }
 
 void
-FileProxyTask::run(ProcessingContext& pc)
+ReaderProxyTask::run(ProcessingContext& pc)
 {
 
   /** check status **/
@@ -143,41 +135,19 @@ FileProxyTask::run(ProcessingContext& pc)
   else payload = readFLP();
   if (payload == 0) return;
 
-  if (mDumpData) {
-    std::cout << " --- dump data: " << payload << " bytes" << std::endl;
-    uint32_t *word = reinterpret_cast<uint32_t *>(mBuffer);
-    for (int i = 0; i < payload / 4; ++i) {
-      printf(" 0x%08x \n", *word);
-      word++;
-    }
-    std::cout << " --- end of dump data " << std::endl;
-  }
+  /** dump payload **/
+  if (mDumpPayload)
+    dumpPayload(mBuffer, payload);
 
-  /** output **/
-  auto device = pc.services().get<o2::framework::RawDeviceService>().device();
-  auto outputRoutes = pc.services().get<o2::framework::RawDeviceService>().spec().outputs;
-  auto fairMQChannel = outputRoutes.at(0).channel;  
-  auto payloadMessage = device->NewMessage(payload);
-  std::memcpy(payloadMessage->GetData(), mBuffer, payload);
-  o2::header::DataHeader header("RAWDATA", "TOF", 0);
-  header.payloadSize = payload;
-  o2::framework::DataProcessingHeader dataProcessingHeader{0};
-  o2::header::Stack headerStack{header, dataProcessingHeader};
-  auto headerMessage = device->NewMessage(headerStack.size());
-  std::memcpy(headerMessage->GetData(), headerStack.data(), headerStack.size());
-  
-  /** send **/
-  FairMQParts parts;
-  parts.AddPart(std::move(headerMessage));
-  parts.AddPart(std::move(payloadMessage));
-  device->Send(parts, fairMQChannel);
+  /** send payload **/
+  sendPayload(pc, mBuffer, payload);
 
   /** check end of file **/
   if (mFile.eof()) {
     std::cout << " --- End of file " << std::endl;
     mStatus = true;
   }
-  
+
 };
 
 
@@ -192,13 +162,13 @@ void customize(std::vector<ConfigParamSpec>& workflowOptions)
 WorkflowSpec defineDataProcessing(ConfigContext const& cfgc)
 {
   return WorkflowSpec {
-    DataProcessorSpec {"file-proxy",
+    DataProcessorSpec {"reader-proxy",
 	Inputs{},
 	Outputs{OutputSpec(ConcreteDataTypeMatcher{"TOF", "RAWDATA"})},
-	AlgorithmSpec(adaptFromTask<FileProxyTask>()),
+	AlgorithmSpec(adaptFromTask<ReaderProxyTask>()),
 	Options{
-	  {"infilename", VariantType::String, "", {"Input file name"}},
-	  {"dump-data", VariantType::Bool, false, {"Dump data"}},
+	  {"filename", VariantType::String, "", {"Input file name"}},
+	  {"dump-payload", VariantType::Bool, false, {"Dump payload before sending it"}},
 	  {"CONET", VariantType::Bool, false, {"CONET mode"}}}
     }
   };
