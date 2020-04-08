@@ -5,14 +5,18 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <stdlib.h>
+#include <stdint.h>
+#include <stdio.h>
 
 int
 main(int argc, char **argv)
 {
-  if (argc != 2) {
-    std::cerr << "usage: ./epn2raw [filename.tf]" << std::endl;
+  if (argc != 3) {
+    std::cerr << "usage: ./epn2raw [filename.tf] [shift]" << std::endl;
     return 1;
   }
+  int shift = atoi(argv[2]);
 
   // input file
   std::ifstream infile;
@@ -44,7 +48,7 @@ main(int argc, char **argv)
   // process
   char buffer[1048576];
   std::string line, cell;
-  int offset, memory;
+  long offset, memory;
   std::getline(infofile, line); // first line is a header
   while (std::getline(infofile, line)) {
     std::stringstream linestream;
@@ -52,8 +56,16 @@ main(int argc, char **argv)
     for (int i = 0; i < 9; ++i) linestream >> cell;
     linestream >> offset >> memory;
 
-    infile.seekg(offset);
+    infile.seekg(offset - shift);
     infile.read(buffer, memory);
+
+    /** check for consistency **/
+    uint32_t *RDHs = reinterpret_cast<uint32_t *>(buffer);
+    if (*RDHs != 0x00044004) {
+      printf(" --- wrong RDH signature at offset %d : %08x \n ", offset, *RDHs);
+      break;
+    }
+
     outfile.write(buffer, memory);
   }
 
