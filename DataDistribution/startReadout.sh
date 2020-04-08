@@ -1,3 +1,5 @@
 #! /usr/bin/env bash
 
-readout.exe file://$PWD/readout_sim.cfg
+### package requirements: Readout
+
+readout.exe file://$PWD/readout_replay.cfg
